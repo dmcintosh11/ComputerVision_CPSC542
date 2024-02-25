@@ -5,7 +5,7 @@
 - Spoke with Joe Ellis about general topics
 
 - Resources used:
-    https://www.tensorflow.org/tutorials/images/transfer_learning
+-- https://www.tensorflow.org/tutorials/images/transfer_learning
     https://www.kaggle.com/code/hamzamanssor/weather-recognition-using-deep-learning-models#🗃%EF%B8%8F-Load-Dataset
     https://www.tensorflow.org/guide/keras/transfer_learning
     https://www.tensorflow.org/api_docs/python/tf/keras/applications/resnet50/ResNet50

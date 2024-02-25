@@ -1,0 +1,284 @@
+---
+title: "Weather Classification Report"
+title-block-banner: true
+title-block-style: default
+date: 2024-02-24
+date-format: short
+abstract: This project utilizes transfer learning from ResNet50 on a dataset containing images of different weather conditions. The dataset used can be downloaded here <https://www.kaggle.com/datasets/jehanbhathena/weather-dataset?resource=download>
+author: Dylan McIntosh
+lightbox: true
+execute:
+  echo: false
+  warning: false
+  cache: true
+format:
+  pdf:
+    toc: true
+    number-sections: true
+    colorlinks: true
+    mainfont: Times New Roman
+    sansfont: Arial
+    monofont: Courier New
+jupyter: python3
+---
+```{python}
+#| echo: false
+#| label: Load data
+#| output: false
+
+'''format:
+  html:
+    code-fold: true
+'''
+
+import data_loaders
+import model_eval
+from sklearn.ensemble import RandomForestClassifier
+from tensorflow.keras.models import load_model
+import joblib
+import pickle
+
+data_handler = data_loaders.DataHandler('./dataset')
+
+train_df, val_df, test_df = data_handler.get_split_data()
+train_gen, valid_gen, test_gen = data_handler.get_generators()
+
+
+
+
+y_train_rf = train_df['Labels']
+y_val_rf = val_df['Labels']
+y_test_rf = test_df['Labels']
+
+
+X_train_rf, X_val_rf, X_test_rf = data_handler.preprocess_RF(img_size=[100, 100], use_grayscale=True)
+
+
+
+X_train_rf_rgb, X_val_rf_rgb, X_test_rf_rgb = data_handler.preprocess_RF(img_size=[100, 100], use_grayscale=False)
+
+
+#Loads trained models from file
+def load_model_and_history(model_path, history_path):
+
+    # Load the model
+    model = load_model(model_path)
+    print("Model loaded successfully from", model_path)
+
+    # Load the training history
+    with open(history_path, 'rb') as file:
+        history = pickle.load(file)
+    print("History loaded successfully from", history_path)
+    
+    return model, history
+
+models_dir = './saved_models/'
+
+
+
+
+train_class_indices = train_gen.class_indices
+
+FeatExtract_CNN, FeatExtract_History = load_model_and_history(f'{models_dir}DL_models/Weather_CNN_Initial_BESTVALLOSS.h5', f'{models_dir}DL_models/Weather_CNN_Initial_History.pkl')
+
+FE_evaluator = model_eval.ModelEvaluator(FeatExtract_CNN, FeatExtract_History, test_gen, test_df, train_class_indices)
+
+
+
+
+FineTuned_CNN, FineTuned_History = load_model_and_history(f'{models_dir}DL_models/Weather_CNN_FineTuned_best_BESTVALLOSS.h5', f'{models_dir}DL_models/Weather_CNN_FineTuned_best_History.pkl')
+
+FT_evaluator = model_eval.ModelEvaluator(FineTuned_CNN, FineTuned_History, test_gen, test_df, train_class_indices)
+
+
+```
+
+\newpage
+
+# Problem Statement
+
+Tracking the weather and natural disasters is a difficult task. It could help government agencies respond to extreme weather events and assist in weather forecasting. The problem can begin to be tackled with utilizing image recognition to classify images of different weather conditions. Weather being so varied and the many different classes of weather create a complex problem that traditional machine learning won't be able to solve, so a deep learning solution is needed. This is proven in the data section of the report.
+
+
+# Data
+
+The dataset contains 6862 images of 11 different classes. The images all come in varying sizes, so some image resizing is needed. A very small number of images are labeled as .jpg files, however they are GIF files. 
+
+The classes are as follows:
+['rain' 'glaze' 'rime' 'rainbow' 'fogsmog' 'frost' 'sandstorm' 'hail' 'snow' 'dew' 'lightning']
+
+Examples of these images can be seen in the appendix.
+
+Some of the classes aren't easily distinguishable from one another with the human eye and could be up to interpretation. For example, the rime, snow, and frost classes are similar. Distinguishing these classes may cause some trouble for the model and evaluation should ensure these are handled properly.
+
+The different colors appear to hold extremely important information. An example is in distinguishing between a sandstorm and a fogsmog label.
+
+The distribution between the classes can be seen here:
+
+```{python}
+#| fig-width: 300
+
+data_handler.show_distribution(5,2)
+
+```
+
+Most of the images are rime, with there being a relatively small amount of rainbow images. Ideally there would be more data for each class since under 800 for most classes isn't an effective amount especially before the data split is done.
+
+An exploratory random forest model was used to determine necessity of a deep learning solution.
+
+```{python}
+
+
+RF_rgb = joblib.load(f"{models_dir}RF_models/RandomForestRGB.joblib")
+
+data_handler.evaluate_RF(RF_rgb, X_test_rf_rgb, y_test_rf, show_cf=False)
+
+
+```
+
+These above results are not satisfactory for solving this problem. This indicates that a deep learning solution is necessary since the complexity of the problem cannot be captured by traditional machine learning models. It is also important to note that another random forest model was tested on this dataset but using grayscale images. The performance of this grayscale model was much worse, indicating that the additional channels assist greatly in classifying the images.
+
+
+# Methods (Preprocessing)
+
+The data was split into train, validation, and test sets with a split of 70/10/20. Stratified splitting was used to ensure stable distributions of classes amongst all three datasets. Generators were created with several data augmentation methods to improve generalizability of model. Rotation, zoom, dimension shifts, shearing, and horizontal flipping were used as augmentation. All images were resized to 224x224 since that is the input size ResNet50 was trained with along with the 3 RGB color channels since those are very important in classifying.
+
+The few cases of GIF files hidden in the data were converted into the first frame of the animation as a .jpg file.
+
+
+# Methods (Model)
+
+Utilized a two step training approach with the first phase being feature extraction, and the second phase being fine tuning.
+
+## Feature Extraction Model
+
+The ResNet50 pre-trained model was loaded from tensorflow libraries with the weights trained from the imagenet dataset. The top layer was replaced with the new architecture. The final layer of ResNet50 leads into a global average pooling layer, then to two dense layers of 100 neurons with relu activation. There are 50% dropout layers applied after each dense layer for regularization. The final output layer is dense with 11 nodes and softmax activation.
+
+The new model is then compiled with categorical crossentropy as the loss, the Adam optimizer, and a default learning rate of 0.001. Early stopping with a patience of 5 is included as well as a model checkpoint to save the best model during training, both with respect to validation loss.
+
+The model was then set to train for 100 epochs with all original pre-trained layers frozen.
+
+## Fine Tuned Model
+
+Now that the new layers have been trained, the fine tuning of the pre-trained layers can begin.
+
+The checkpoint model with the best validation loss was loaded in to be altered. All top 50 layers of the model, except for batch normalization layers, were unfrozen to be fine tuned. The batch normalization layers were kept frozen so that the information about distributions learned in the original model isn't lost.
+
+The model was compiled with the same loss and optimizer, except for a new smaller learning rate of 0.0001 to preserve pre-trained weights and encourage convergence. The same callbacks were used to save the best checkpoint model.
+
+The model was then sent to train for 100 epochs.
+
+
+# Results
+
+```{python}
+
+FT_evaluator.plot_history()
+
+```
+
+The history of the training above shows that the loss slowly adjusts as the model fine tunes, and the best validation loss was at epoch 6. This means that it is the model that will be used for the rest of the report. It is important to note that the reason the validation set appears to perform better is because there is no dropout being applied during inference, so the model performs much better.
+
+```{python}
+
+FT_evaluator.print_report()
+
+```
+
+```{python}
+
+FT_evaluator.plot_cf(width=7, height=5)
+
+```
+
+This model performs significantly better than the random forest model. There is struggle with snow/cold weather conditions, with frost and glaze classes having the worst performance. The confusion matrix shows that the main issues to resolve are the model predicting frost when it should be glaze and predicting hail when it should be rain. An accuracy of 96% along with around that same percentage for macro and weighted averages for all of precision, recall, and f1-score is good performance.
+
+The main takeaway is that the model falters with frost vs glaze and hail vs rain, however great performance otherwise with the confusion matrix focused along the diagonal.
+
+
+```{python}
+
+FT_evaluator.display_worst_performing_images(9, width=7, height=4)
+
+```
+
+The above images show how difficult it is for the model to distinguish between the snow/cold classes, whereas the data is difficult for even a human to label.
+
+
+# Discussion
+
+With the model's main error being predicting snow/cold conditions incorrectly, this could lead to snowstorms going undetected decently often in the real world. Even though the precision and recall values aren't awful, a value as low as 0.91 likely wouldn't suffice for deployment. Issues like this when deployed will become emphasized since there would be many inferences happening, and more are probably going to be incorrect inferences than ideal.
+
+Including multiple channels proved to be a great performance enhancer since color differences in weather conditions is extremely relevant. Also adding dropout layers led to a much better performance on the validation set during training
+
+Moving into a continuation of this project the solution would likely be to handle the class imbalance of many more rime images than any other snow/cold related class. This class imbalance could be tackled by creating a weighted loss function to give the classes proportional impact over the weight learning, so underrepresented classes impact the loss more. Another solution could be to augment more images of the underrepresented classes that have issues such as glaze and frost.
+
+More work is to be done to make this a model worth deploying.
+
+Through this assignment I refreshed on many deep learning concepts such as data augmentation and transfer learning. I got to understand the different phases of transfer learning and that batch normalization layers in pre-trained models shouldn't be set to trainable. The main thing I gained was building modular code and class libraries to reuse for the future to make more computer vision tasks easier.
+
+
+\newpage
+
+
+# Appendix
+
+## Image Examples
+
+```{python}
+#| fig-width: 400
+
+data_handler.show_examples(8,5)
+
+```
+
+## Grayscale Random Forest Results
+
+```{python}
+# Grayscale RF
+
+RF = joblib.load(f"{models_dir}RF_models/RandomForestGrayscale.joblib")
+
+data_handler.evaluate_RF(RF, X_test_rf, y_test_rf, show_cf=False)
+
+```
+
+
+
+
+## Feature Extraction Results
+
+
+```{python}
+
+FE_evaluator.plot_history()
+
+```
+
+```{python}
+
+FE_evaluator.print_report()
+
+```
+
+```{python}
+
+FE_evaluator.plot_cf()
+
+```
+
+```{python}
+#| fig-width: 400
+
+FE_evaluator.plot_examples()
+
+```
+
+## Fine Tuning Example Images
+
+```{python}
+#| fig-width: 600
+
+FT_evaluator.plot_examples()
+
+```

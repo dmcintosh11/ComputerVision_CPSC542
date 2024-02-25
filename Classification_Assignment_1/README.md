@@ -16,4 +16,4 @@
 - Data can be accessed through Kaggle:
     https://www.kaggle.com/datasets/jehanbhathena/weather-dataset?resource=download
 
-- https://www.github.com/dmcintosh11/CPSC_542/Assignment_1
+- https://github.com/dmcintosh11/ComputerVision_CPSC542/tree/master/Classification_Assignment_1

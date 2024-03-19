@@ -1,0 +1,145 @@
+---
+title: "Bodies of Water Segmentation Report"
+title-block-banner: true
+title-block-style: default
+date: 2024-03-17
+date-format: short
+abstract: This project utilizes transfer learning with UNet++ and ResNet50 as the backbone on a dataset of satellite images of bodies of water. The dataset used can be downloaded here <https://www.kaggle.com/datasets/franciscoescobar/satellite-images-of-water-bodies/data>
+author: Dylan McIntosh
+lightbox: true
+execute:
+  echo: false
+  warning: false
+  cache: true
+format:
+  pdf:
+    geometry:
+      - margin=1in # Sets all margins to 1 inch
+    toc: true
+    number-sections: true
+    colorlinks: true
+    mainfont: Times New Roman
+    sansfont: Arial
+    monofont: Courier New
+    page-layout: full
+jupyter: python3
+---
+
+\newpage
+
+# Problem Statement
+
+Tracking the levels of water to understand drought and climate change with rising or falling is a difficult task. It could help forecast climate change to determine best course of action or indicate assistance is needed in areas where water levels are shrinking. The problem can begin to be tackled with utilizing image segmentation to discern bodies of water from non-bodies of water. Image segmentation, especially on satellite imagery, is a complex task that traditional machine learning won't be able to solve, so a deep learning solution is needed.
+
+
+# Data
+
+The dataset contains 2841 RGB satellite images with masks of 2 different classes, water and not water. The images all come in varying sizes, so some image resizing is needed. A distribution of the pixel values for each class (0 for non-body of water and 255 for body of water) can be seen here:
+
+![Distribution of Pixel Values in Mask](./plots/exploratory/mask_pixel_value_distributions.png){width=300 fig-align="center"}
+
+This graph shows that there is a slight class imbalance with more pixels labelled as non-bodies of water than bodies of water. A major issue that this plot brings up is that there are a small amount pixel values that don't fall in the binary classification values. This was likely due to the lossy compression of the masks since all the images and masks are stored as .jpg files.
+
+Examples of these images with masks can be seen in the results section.
+
+Some of the images seem to be low quality, either through poor resolution, or weather conditions causing the image's colors to be washed out. Another issue is that the ground truth masks aren't 100% accurate. Some masks are inverted where the classes are switched, others just don't segment the water properly.
+
+
+# Methods (Preprocessing)
+
+For all operations, a random seed of 7 was used to maintain reproducibility.
+
+The data was shuffled and split into train, validation, and test sets with a split of 70/15/15. Generators were created with several data augmentation methods to improve generalizability of model. Affine translations (Rotation, zoom, translation shifts, and horizontal flips) along with color jittering (Brightness, contrast, saturation, and hue) were used as augmentation onto the training set. All images were resized to 224x224 since that is the input size ResNet50 was trained with along with the 3 RGB color channels. The images were also normalized to the same normal distribution as the imagenet dataset to maximize the use of transfer learning since ResNet was trained on imagenet data.
+
+The issue from lossy jpg compression's effect on pixel values was resolved by using a threshold to force the mask to binary pixel values of the closest class.
+
+
+# Methods (Model)
+
+This model utilized the UNet++ architecture to handle image segmentation efficiently on a relatively small dataset. The general idea of this architecture is using an encoder to downsample the input into important features, then using the decoder to upsample back into the original dimensions of the input, classifying each pixel as a class. There are skip connections between the encoder and decoder to maintain the passing of important information. The improvement from the UNet to the UNet++ architecture is adjusting the skip connections to be nested sub-decoder models. These models aggregate and upsample information from the different layers of the encoder with convolutions, rather than simply passing the information to the corresponding layer in the decoder.
+
+## Encoder
+
+The backbone of this model is ResNet50 with pre-trained weights from the imagenet dataset. It takes an input image of 224x224 with 3 channels and begins applying several blocks containing consecutive Conv2D blocks, to Batch Normalization for regularization, to ReLU activation, into a max pooling. There are 4 of these blocks that continue to downsample the input, with residual connections between each block to mitigate the vanishing gradient.
+
+## Decoder
+
+The decoder for the model is the inverse of the encoder to upsample the output of the encoder. It consists of 10 decoder blocks, each with 2 layers of Conv2D, to Batch Normalization for regularization, into a ReLU activation layer. These 10 decoder blocks increase the resolution of the output until it reaches the dimensions of the initial image input. The output is logits that get sigmoid function applied to them with a threshold of 0.5 to create a binary classification mask.
+
+The decoder's weights began untrained.
+
+## Training
+
+The architecture was trained with Binary Cross Entropy with Logits as the loss function for binary segmentation. It uses Adam as the optimizer with a learning rate of 0.001. It was then sent to train for 25 epochs, using early stopping with a patience of 5 to finish training if the validation set loss doesn't improve for 5 epochs.
+
+All weights are unfrozen during training.
+
+
+# Results
+
+The model history is as follows:
+
+![Model's Loss History](./plots/evaluation/UNetPP/UNetPP_loss_curve.png){width=300 fig-align="center"}
+
+This shows that the model trained for the full 25 epochs without early stopping ending the training early. The model's best performance on the validation set before overfitting occurs is at epoch 21. This is the model that will be used for evaluation.
+
+The metrics for evaluation are as follows:
+
+```{python}
+
+#Show metric table
+import pandas as pd
+from IPython.display import display, HTML
+
+metrics = pd.read_csv('./plots/evaluation/UNetPP/combined_metrics.csv')
+
+metrics = metrics.round(2)
+
+html_df = metrics.to_html()
+cenetered_html = f"<center>{html_df}</center>"
+
+display(HTML(cenetered_html))
+
+```
+
+The table shows that this model isn't overfit since the metrics for the training set aren't significantly better than the test set metrics. The performance of the model on the test set is decent, with accuracy, precision, recall, and f1 score all being above 0.8. The IoU score is above 0.5 which means it is decent, but could be better.
+
+The rest of the evaluation is conducted on the test set.
+
+The confusion matrix for the test set can be seen here:
+
+![Test Set Confusion Matrix](./plots/evaluation/UNetPP/Test/Test_confusion_matrix.png){width=300 fig-align="center"}
+
+One thing to note is that the model has better precision than recall, meaning it is slightly conservative in predicting the water class. With the water class as positive, it has fewer false positives but more false negatives.
+
+GRADCAM was applied using the 4th layer of the encoder as the target layer in the best and worst example plots.
+
+Some examples of the test set predictions the model performs the best on according to loss are here:
+
+![Test Set Best Predictions](./plots/evaluation/UNetPP/Test/best_with_grad_cam.png){width=500 fig-align="center"}
+
+This shows how accurate the predicted mask can be, outlining the body of water almost perfectly in these examples. The GRADCAM overlays indicate that the model generally gets activated by the bottom left of the image and pays attention to the land outside of the water.
+
+Worst performance predictions:
+
+![Test Set Worst Predictions](./plots/evaluation/UNetPP/Test/worst_with_grad_cam.png){width=500 fig-align="center"}
+
+These examples show how the predictions of the model are generally conservative in labelling pixels as water, with how small the bodies of water in the predicted mask are. It also shows how the model can be more accurate than the ground truth masks in the data. Some of the ground truth masks here are inverted, labelling the water as land while others are just nonsensical. The GRADCAM continues to show activation around the bottom left of the image, which is unusual since there is nothing generally visually important there in the original image.
+
+
+# Discussion
+
+
+The model's precision being better than the recall indicates the tendency to be conservative in labelling water. This along with the IoU score being less than ideal means the model isn't production ready for the task. If bodies of water are predicted to be smaller than they actually are, detecting drought or tracking climate change won't work properly. Emergency responses to drought could be triggered far too often, or the rising sea level from climate change could be underrepresented.
+
+Several less successful attemps at different models were made. Other variations of ResNet were tested as backbones such as ResNet34 and ResNet18. These didn't seem to extract the complex relationships present in the data. The original UNet architecture was tested with the different ResNet models as backbones. This had the same issue where UNetPP with ResNet50 appeared to be the best balance of simplicity with performance.
+
+Another attempt at improving the model was to include Dice Loss with BCE for a combined loss function. This seemed to be a popular approach to image segmentation, but it didn't prove successful for this use case. The issue seemed to be that the model learned from the dataset much better, but the quality of the ground truth masks being so poor hurt performance. The model seemed to learn to be better at doing bad predictions, since the data was incorrect.
+
+Moving forward the data needs to be cleaned intensely. The easiest way to achieve this would be to manually go through and remove any images where the mask is wildly off from reality. There don't seem to be an enormous amount of incorrect labels, so this would be ideal. The UNet architecture is also designed to perform well with minimal data, so even with less data this should be an improvement.
+
+Another improvement to make would be to keep the encoder layers frozen during initial training, then gradually unfreeze the top layers of encoder to fine tune.
+
+More work is to be done to make this a model worth deploying.
+
+Through this assignment I learned how to do image segmentation for the first time. I got a chance to dive deep into understanding several different architectures, and better understand encoder decoder frameworks. Another important thing I learned is how to use Pytorch since I generally stick to Tensorflow when creating architectures. This gives me a new library to use for future image segmentation tasks using pytorch.
